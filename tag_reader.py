@@ -21,6 +21,38 @@ class TagReader:
             print "Unable to open file"
 
 
+    ## Check which tag is available (newest first)
+    #  @return tuple (tag, version)
+    def check_tag(self):
+        val = self.check_if_id3v1()
+        if val[0] == True:
+            return ("id3v1",val[1])
+        
+        val = self.check_if_id3v2()
+        if val[0] == True:
+            return ("id3v2", val[1])
+
+        return (None, None)
+
+
+    ## Check if id3v1 tag exists
+    #  @note returned string is "" if normal, "e" if extended
+    #  @return tuple (bool, string)
+    def check_if_id3v1(self):
+        try:
+            self.file_handle.seek(-355, 2)
+            if self.file_handle.read(4) == "TAG+":
+                return (True, "e")
+
+            self.file_handle.seek(-128,2)
+            if self.file_handle.read(3) == "TAG":
+                return (True, " ")
+
+            return (False, None)
+        except IOError:
+            pass
+
+
     ## Check if specified bit in byte is set.
     #  @param byte  int representation of a byte
     #  @param index Location of the bit
@@ -30,8 +62,19 @@ class TagReader:
 
 
     ###########################################################################
-    #                       Version 1                                         #
+    #                   Version 1 Extended                                    #
+    #        +-------------------------------------+                          #
+    #        |TAG+       |  04 char |  -355 to -352|                          #
+    #        |Song Title |  60 char |  -351 to -293|                          #
+    #        |Artist     |  60 char |  -292 to -232|                          #
+    #        |Album      |  60 char |  -231 to -173|                          #
+    #        |Speed      |  01 byte |          -172|                          #
+    #        |Genre      |  30 char |  -171 to -141|                          #
+    #        |Start-Time |  06 byte |  -140 to -135|                          #
+    #        |End-Time   |  06 byte |  -134 to -129|                          #
+    #        +-------------------------------------+                          #
     #                                                                         #
+    #                       Version 1                                         #
     #        +-------------------------------------+                          #
     #        |TAG        |  03 char |  -128 to -126|                          #
     #        |Song Title |  30 char |  -125 to -96 |                          #
@@ -46,20 +89,52 @@ class TagReader:
     ###########################################################################
     
     ## Read version 1 of ID3
+    #  @note Format {Artist, Album, Title, Year, Comments, Track, Genre}
+    #  @note Genre, Index in list of genres, or 255
+    #  @return Associative Array
     def id3v1(self):
+        data = {'Artist':None, 'Album':None, 'Title':None, 'Year':None, \
+            'Comments':None, 'Track':None, 'Genre':None}
+        
         try:
             self.file_handle.seek(-128, 2)
-            self.file_handle.read(3)   # Identifier
-            title  = self.file_handle.read(30)     # Song Title
-            artist = self.file_handle.read(30)     # Artist
-            album  = self.file_handle.read(30)     # Album
-            year   = self.file_handle.read(4)      # Year
-            comm   = self.file_handle.read(28)     # Comment
-            self.file_handle.read(1)               # Null
-            track  = self.file_handle.read(1)      # Track
-            genre  = self.file_handle.read(1)      # Genre
+            self.file_handle.read(3)                        # Identifier
+            data['Title']   = self.file_handle.read(30)
+            data['Artist']  = self.file_handle.read(30)
+            data['Album']   = self.file_handle.read(30)
+            data['Year']    = self.file_handle.read(4)
+            data['Comment'] = self.file_handle.read(28)
+            self.file_handle.read(1)
+            data['Track']   = self.file_handle.read(1)
+            data['Genre']   = ord(self.file_handle.read(1))
 
-            return [title, artist, album, year, comm, track, genre]
+            return data
+        except IOError:
+            pass
+
+
+    ## Read extended tag of ID3v1
+    #  @note Format {Artist, Title, Artist, Album, Speed, Genre, Start-Time,
+    #        End-Time}
+    #  @note Speed: 0=unset, 1=slow, 2=medium,3=fast,4=hardcore
+    #  @note Start-Time, End-Time: mmm:ss
+    #  @return Associative Array
+    def id3v1_1(self):
+        data = {'Artist':None, 'Title':None, 'Artist':None, 'Album':None, \
+            'Speed':None, 'Genre':None, 'Start-Time':None, 'End-Time':None}
+
+        try:
+            self.file_handle.seek(-355, 2)
+            self.file_handle.read(4)                        # Identifier
+            data['Title']       = self.file_handle.read(60)
+            data['Artist']      = self.file_handle.read(60)
+            data['Album']       = self.file_handle.read(60)
+            data['Speed']       = self.file_handle.read(1)
+            data['Genre']       = self.file_handle.read(30)
+            data['Start-Time']  = self.file_handle.read(6)
+            data['End-Time']    = self.file_handle.read(6)
+
+            return data
         except IOError:
             pass
 
@@ -108,6 +183,8 @@ class TagReader:
     #       TP1 Lead artist(s)/Lead performer(s)/Soloist(s)/Performing group
     #       TAL Album/Movie/Show title
     #       TYE Year
+    #       TCO Content Type
+    #       TRK Track Number
     #  @param self
     #  @return Associative array
     def id3v2_2(self):
@@ -147,6 +224,14 @@ class TagReader:
                 if tag == "TYE":
                     data['Year'] = val
                     continue
+
+                if tag == "TCO":
+                    data['Genre'] = val
+                    continue
+
+                if tag == "TRK":
+                    data['Track'] = val
+                    continue
             
             return data
         except IOError:
@@ -178,19 +263,6 @@ class TagReader:
         return total_size
 
 
-    ## Check if id3v1 tag exists
-    #  @return bool
-    def check_if_id3v1(self):
-        try:
-            self.file_handle.seek(-128,2)
-            if self.file_handle.read(3) == "TAG":
-                return True
-
-            return False
-        except IOError:
-            pass
-
-
     ## Check if id3v2 tag exists
     #  ID3v2 follows the pattern:
     #  $49 $44 $33 yy yy xx zz zz zz zz
@@ -219,30 +291,25 @@ class TagReader:
             pass
 
    
-    ## Check which tag is available (newest first)
-    #  @return tuple (tag, version)
-    def check_tag(self):
-        # TODO
-        #if self.check_if_id3v1():
-        #    return ("id3v1",None)
-        
-        val = self.check_if_id3v2()
-        if val[0] == True:
-            return ("id3v2", val[1])
-
-        return (None, None)
-
 
     ## Read tag based on initial information
-    #  @return None if nothin, else associative array.
+    #  @return None if nothinig, else associative array.
     def read_tags(self):
+        self.file_handle
         if self.file_handle == None:
             return None
 
         if self.file_handle.closed:
             self.file_handle = open(self.filename, "r")
 
-        if self.tag[0] == "id3v2":
+        if self.tag[0] == "id3v1":
+            if self.tag[1] == "e":
+                pass    # TODO:Need to find a test case
+            else:
+                data = self.id3v1()
+                self.file_handle.close()
+                return data
+        elif self.tag[0] == "id3v2":
             if self.tag[1] == "\x02":
                 data = self.id3v2_2()
                 self.file_handle.close()
