@@ -24,14 +24,14 @@ class TagReader:
     ## Check which tag is available (newest first)
     #  @return tuple (tag, version)
     def check_tag(self):
-        val = self.check_if_id3v1()
-        if val[0] == True:
-            return ("id3v1",val[1])
-        
         val = self.check_if_id3v2()
         if val[0] == True:
             return ("id3v2", val[1])
 
+        val = self.check_if_id3v1()
+        if val[0] == True:
+            return ("id3v1",val[1])
+        
         return (None, None)
 
 
@@ -49,6 +49,34 @@ class TagReader:
                 return (True, " ")
 
             return (False, None)
+        except IOError:
+            pass
+    
+    
+    ## Check if id3v2 tag exists
+    #  ID3v2 follows the pattern:
+    #  $49 $44 $33 yy yy xx zz zz zz zz
+    #  Where yy < $FF,
+    #    xx is flags byte
+    #    zz < $80
+    #  @return tupe (false, 0) or (True, version (hex string))
+    def check_if_id3v2(self):
+        try:
+            header = self.id3v2_header()
+            if header[0] != "ID3":
+                return (False,0)
+
+            if header[1] == 0xFF:
+                return (False,0)
+            
+            if header[2] == 0xFF:
+                return (False,0)
+            
+            size = header[4][0] + header[4][1] + header[4][2] + header[4][3]
+            if size >= 128:
+                return (False,0)
+            
+            return (True, header[1])
         except IOError:
             pass
 
@@ -177,6 +205,43 @@ class TagReader:
             pass
 
 
+    ## Start of ID3v2 family
+    #  @return Associative array
+    def id3v2(self):
+        header = self.id3v2_header() 
+            
+        version = ord(header[1])
+        if version == 2:
+            return self.id3v2_2(header)
+        elif version == 3 or version == 4:  # TODO: Implement v.4
+            return self.id3v2_3(header)
+
+
+    ## Decode size of id3v2 tag.
+    #  Tag is encoded with four bytes where the first bit is set to zero
+    #  in every byte, making a total of 28 bits.
+    #  @param bytearray
+    #  @return float
+    def id3v2_decode_size(self,size):
+        total_size = 0
+        i = 3 
+        j = 0
+        t = 0
+        while i >= 0:
+            j = 0
+            while j < 8:
+                if j != 7:
+                    if self.get_bit(size[i],j) == 1:
+                        total_size += math.pow(2,t)
+                    t += 1
+
+                j += 1
+
+            i -= 1 
+
+        return total_size
+
+
     ## Parse for version 2 of ID3v2
     #  Implemented tags:
     #       TT2 Title/Songname/Content description
@@ -185,15 +250,11 @@ class TagReader:
     #       TYE Year
     #       TCO Content Type
     #       TRK Track Number
-    #  @param self
     #  @return Associative array
-    def id3v2_2(self):
+    def id3v2_2(self,header):
         data = {'Artist':None, 'Album':None, 'Title':None, 'Year':None, \
             'Comments':None, 'Track':None, 'Genre':None}
-
         try:
-            header = self.id3v2_header() 
-            
             #TODO Check if bit 7 of flags is set
             size = (self.id3v2_decode_size(header[4]) - 1) - 10
             
@@ -237,65 +298,71 @@ class TagReader:
         except IOError:
             pass
 
-
-    ## Decode size of id3v2 tag.
-    #  Tag is encoded with four bytes where the first bit is set to zero
-    #  in every byte, making a total of 28 bits.
-    #  @param bytearray
-    #  @return float
-    def id3v2_decode_size(self,size):
-        total_size = 0
-        i = 3 
-        j = 0
-        t = 0
-        while i >= 0:
-            j = 0
-            while j < 8:
-                if j != 7:
-                    if self.get_bit(size[i],j) == 1:
-                        total_size += math.pow(2,t)
-                    t += 1
-
-                j += 1
-
-            i -= 1 
-
-        return total_size
-
-
-    ## Check if id3v2 tag exists
-    #  ID3v2 follows the pattern:
-    #  $49 $44 $33 yy yy xx zz zz zz zz
-    #  Where yy < $FF,
-    #    xx is flags byte
-    #    zz < $80
-    #  @return tupe (false, 0) or (True, version (hex string))
-    def check_if_id3v2(self):
+    
+    ## Parse for version  of ID3v2
+    #  Implemented tags:
+    #       TIT2 Title/Songname/Content description
+    #       TPE1 Lead artist(s)/Lead performer(s)/Soloist(s)/Performing group
+    #       TALB Album/Movie/Show title
+    #       TYER Year
+    #       TCON Content Type
+    #       TRCK Track Number
+    #  @return Associative array
+    def id3v2_3(self, header):
+        data = {'Artist':None, 'Album':None, 'Title':None, 'Year':None, \
+            'Comments':None, 'Track':None, 'Genre':None}
         try:
-            header = self.id3v2_header()
-            if header[0] != "ID3":
-                return (False,0)
+            #TODO Check if bit 7 of flags is set
+            size = (self.id3v2_decode_size(header[4]) - 1) - 10
+            
+            if self.get_bit(header[3][0], 6):
+                pass            # TODO: Implement details for extended header
 
-            if header[1] == 0xFF:
-                return (False,0)
-            
-            if header[2] == 0xFF:
-                return (False,0)
-            
-            size = header[4][0] + header[4][1] + header[4][2] + header[4][3]
-            if size >= 128:
-                return (False,0)
-            
-            return (True, header[1])
+            curr = size
+            while curr > 0:
+                tag   = self.file_handle.read(4)
+                tsize = self.file_handle.read(4)
+                flags = self.file_handle.read(2)
+                curr -= 6
+
+                fsize = 0
+                for i in tsize:
+                    fsize += ord(i)
+    
+                val   = self.file_handle.read(fsize)
+                curr -= fsize
+                if tag == "TIT2":
+                    data['Title'] = val
+                    continue
+
+                if tag == "TALB":
+                    data['Album'] = val
+                    continue
+
+                if tag == "TPE1":
+                    data['Artist'] = val
+                    continue
+
+                if tag == "TYER":
+                    data['Year'] = val
+                    continue
+
+                if tag == "TCON":
+                    data['Genre'] = val
+                    continue
+
+                if tag == "TRCK":
+                    data['Track'] = val
+                    continue
+            return data
         except IOError:
             pass
 
-   
 
     ## Read tag based on initial information
     #  @return None if nothinig, else associative array.
     def read_tags(self):
-        self.file_handle
+        data = None
         if self.file_handle == None:
             return None
 
@@ -307,12 +374,8 @@ class TagReader:
                 pass    # TODO:Need to find a test case
             else:
                 data = self.id3v1()
-                self.file_handle.close()
-                return data
         elif self.tag[0] == "id3v2":
-            if self.tag[1] == "\x02":
-                data = self.id3v2_2()
-                self.file_handle.close()
-                return data
+            data = self.id3v2()
         
-        return None
+        self.file_handle.close()
+        return data
